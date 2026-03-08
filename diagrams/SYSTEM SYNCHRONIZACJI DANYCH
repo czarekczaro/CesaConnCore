@@ -1,27 +1,109 @@
 ---
 config:
   layout: dagre
+  theme: dark
 ---
 flowchart BT
- subgraph Dev1["Urządzenie 1"]
-        Sync1["Sync Engine"]
-        Net1["Networker"]
-  end
- subgraph Dev2["Urządzenie 2"]
-        Net2["Networker"]
-        Sync2["Sync Engine"]
-  end
- subgraph Dev3["Urządzenie 3"]
-        Net3["Networker"]
-        Sync3["Sync Engine"]
-  end
-    Title["<b>SYSTEM SYNCHRONIZACJI DANYCH</b>"] --- User(["fa:fa-user Użytkownik"])
-    User -- Inicjuje zmianę --> Sync1
-    Sync1 -- Przekazuje dane --- Net1
-    Net1 == Transfer ==> Net2 & Net3
-    Net2 -- Przekazuje dane --- Sync2
-    Sync2 -. Powiadomienie .-> User
-    Net3 -- Przekazuje dane --- Sync3
-    Sync3 -. Powiadomienie .-> User
+    %% --- KLASY STYLÓW (Mocne Złoto + Głęboka Czerń) ---
+    classDef device fill:#0d0f05,stroke:#e0c341,stroke-width:3px,color:#e0c341
+    classDef engine fill:#141708,stroke:#8b7d3a,color:#ffffff
+    classDef proc fill:#1a1d0b,stroke:#e0c341,color:#ffffff
+    classDef active fill:#e0c341,stroke:#0d0f05,color:#0d0f05
 
-    style Title fill:none,stroke:none,font-size:20px
+    %% --- URZĄDZENIE 1 (NADAWCA) ---
+    subgraph Dev1["Device 1 (Smartphone)"]
+        direction TB
+        subgraph Sync1["Sync Engine Outbound"]
+            elr["Changes Listener"]
+            Flg["Setting Flag"]
+            Enc["Encryption"]
+        end
+        subgraph Net1["Networker (New thread)"]
+            Init["Encrypted data"]
+            subgraph chs["Connection Decide"]
+                Chks["Checking data size"]
+                Meas["Measure connection strength"]
+                Adap["Check available adapters"]
+            end
+            subgraph Hnd["2 Way handshake authentication"]
+                Success["Success"]
+                Failed["Failed"]
+            end
+            N["None"]
+        end
+    end
+
+    %% --- ODBIORCY ---
+    subgraph Dev2["Device 2 (Laptop)"]
+        direction TB
+        subgraph Net2["Net Inbound 2"]
+            RecData2["Received Data"]
+            Auth2["Auth Handler"]
+        end
+        subgraph Sync2["Sync Inbound 2"]
+            Dec2["Decryption"]
+            Apply2["Apply Changes"]
+        end
+    end
+
+    subgraph Dev3["Device 3 (Workstation)"]
+        direction TB
+        subgraph Net3["Net Inbound 3"]
+            RecData3["Received Data"]
+            Auth3["Auth Handler"]
+        end
+        subgraph Sync3["Sync Inbound 3"]
+            Dec3["Decryption"]
+            Apply3["Apply Changes"]
+        end
+    end
+
+    subgraph Dev4["Device 4 (Tablet)"]
+        direction TB
+        subgraph Net4["Net Inbound 4"]
+            RecData4["Received Data"]
+            Auth4["Auth Handler"]
+        end
+        subgraph Sync4["Sync Inbound 4"]
+            Dec4["Decryption"]
+            Apply4["Apply Changes"]
+        end
+    end
+
+    %% --- PRZEPŁYW DANYCH (Złote strzałki) ---
+    elr -- Data --> Flg --> Enc ==> Init
+    Init --> Chks --> Meas --> Adap
+    Adap -- Adapter info --> Hnd
+    Adap --> N
+
+    %% Wielostronny Handshake
+    Hnd <== Auth ==> Auth2
+    Hnd <== Auth ==> Auth3
+    Hnd <== Auth ==> Auth4
+
+    %% Rozsyłanie (Broadcast)
+    Success == Encrypted Broadcast ==> RecData2
+    Success == Encrypted Broadcast ==> RecData3
+    Success == Encrypted Broadcast ==> RecData4
+
+    %% Procesowanie u odbiorców
+    RecData2 --> Dec2 --> Apply2
+    RecData3 --> Dec3 --> Apply3
+    RecData4 --> Dec4 --> Apply4
+
+    %% Użytkownik i Tytuł
+    Title["<b>CesaConn sync engine</b>"] --- User(["fa:fa-user User"])
+    User -. Initiates Copy .-> elr
+    N -. Error .-> User
+    Failed -. Warning .-> User
+    Apply2 & Apply3 & Apply4 -. "Clipboard Updated" .-> User
+
+    %% --- PRZYPISANIE KLAS ---
+    class Dev1,Dev2,Dev3,Dev4 device
+    class Sync1,Sync2,Sync3,Sync4,Net1,Net2,Net3,Net4 engine
+    class elr,Flg,Enc,Init,Chks,Meas,Adap,Dec2,Dec3,Dec4,RecData2,RecData3,RecData4 proc
+    class Success,Apply2,Apply3,Apply4,User active
+
+    %% Style linii (wymuszenie złota)
+    linkStyle default stroke:#e0c341,stroke-width:1.5px
+    linkStyle 3,8,9,10,11,12,13 stroke:#e0c341,stroke-width:3px
