@@ -1,4 +1,4 @@
 fn main() {
-    //ok
+    //o
     println!("Hello, world!");
 }
