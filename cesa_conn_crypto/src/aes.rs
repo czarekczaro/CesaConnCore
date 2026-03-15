@@ -25,15 +25,21 @@ pub fn encrypt(key: &[u8; 32], data: &[u8]) -> Result<(Vec<u8>, [u8; 12]), Crypt
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
 
     let mut nonce_bytes = [0u8; 12];
-
     let mut rng = SysRng::default();
 
     rng.try_fill_bytes(&mut nonce_bytes).map_err(|_| CryptoError::NonceFailed)?;
 
     let nonce = Nonce::from(nonce_bytes);
-
     let ciphertext = cipher.encrypt(&nonce, data).map_err(|_| CryptoError::EncryptionFailed)?;
 
     Ok((ciphertext, nonce_bytes))
+}
 
+pub fn decrypt(key: &[u8; 32], ciphertext: &[u8], nonce_bytes: &[u8; 12]) -> Result<(Vec<u8>), CryptoError> {
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let nonce = Nonce::from(*nonce_bytes);
+
+    let plaintext = cipher.decrypt(&nonce, ciphertext).map_err(|_| CryptoError::DecryptionFailed)?;
+    
+    Ok(plaintext)
 }
