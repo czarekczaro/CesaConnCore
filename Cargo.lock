@@ -191,6 +191,7 @@ dependencies = [
  "argon2",
  "ed25519-dalek",
  "rand",
+ "sha2",
  "x25519-dalek",
  "zeroize",
 ]
