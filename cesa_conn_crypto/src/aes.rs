@@ -1,3 +1,5 @@
+use core::fmt;
+
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use aes_gcm::aead::{Aead, KeyInit};
 
@@ -13,6 +15,16 @@ pub enum AESError {
     EncryptionFailed,
     /// AES-256-GCM decryption failed — data may have been tampered with
     DecryptionFailed,
+}
+
+impl fmt::Display for AESError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            AESError::NonceFailed       => write!(f, "Failed to generate secure random nonce"),
+            AESError::EncryptionFailed  => write!(f, "Encryption failed"),
+            AESError::DecryptionFailed  => write!(f, "Decryption failed — data may be corrupted or tampered"),
+        }
+    }
 }
 
 /// Encrypts data using AES-256-GCM with a randomly generated nonce.
