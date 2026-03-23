@@ -1,17 +1,39 @@
 use tokio::net::UdpSocket;
 use tokio::time::{Duration, sleep, timeout};
-
 use core::net::SocketAddr;
+use core::fmt;
 
+/// Errors that can occur during UDP networking operations
 #[derive(Debug)]
 pub enum UdpNetworkerErrors {
+    /// Failed to bind UDP socket to the given address
     FailedToBindSocket,
+    /// Failed to enable or disable broadcast mode on the socket
     FailedToSetBroadcastMode,
+    /// Failed to send broadcast packet to the network
     FailedToSendBroadcast,
+    /// No device responded within the given duration
     Timeout,
+    /// Failed to receive incoming UDP packet
     FailedToFetchResult,
+    /// Received packet was larger than the buffer — may have been truncated
     DataTooBig,
+    /// Received packet does not match the expected device identifier
     UnknownDevice,
+}
+
+impl fmt::Display for UdpNetworkerErrors {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            UdpNetworkerErrors::FailedToBindSocket       => write!(f, "Failed to bind UDP socket"),
+            UdpNetworkerErrors::FailedToSetBroadcastMode => write!(f, "Failed to set broadcast mode"),
+            UdpNetworkerErrors::FailedToSendBroadcast    => write!(f, "Failed to send broadcast packet"),
+            UdpNetworkerErrors::Timeout                  => write!(f, "Discovery timed out — no device found"),
+            UdpNetworkerErrors::FailedToFetchResult      => write!(f, "Failed to receive UDP packet"),
+            UdpNetworkerErrors::DataTooBig               => write!(f, "Received packet exceeds buffer size"),
+            UdpNetworkerErrors::UnknownDevice            => write!(f, "Unknown device — name mismatch"),
+        }
+    }
 }
 
 /// Maximum allowed duration for broadcast/listening operations in seconds
@@ -22,21 +44,24 @@ pub static BROADCAST_NAME: &str = "CesaConn Brodcast";
 
 /// Broadcasts a UDP presence message every second for the given duration.
 /// Duration is capped at MAX_BROADCAST_DURATION to prevent indefinite broadcasting.
+/// Returns Ok(()) if all packets were sent successfully.
 pub async fn udp_broadcast_presence(
     message: &str,
     duration: u64,
 ) -> Result<(), UdpNetworkerErrors> {
-    // Cap duration to the allowed maximum
+    // Cap duration to the allowed maximum to prevent indefinite broadcasting
     let duration = if duration > MAX_BROADCAST_DURATION {
         MAX_BROADCAST_DURATION
     } else {
         duration
     };
+
+    // Bind to all interfaces on port 6363
     let socket = UdpSocket::bind("0.0.0.0:6363")
         .await
         .map_err(|_| UdpNetworkerErrors::FailedToBindSocket)?;
 
-    // Enable broadcast mode — required for sending to 255.255.255.255
+    // Enable broadcast mode — required to send packets to 255.255.255.255
     socket
         .set_broadcast(true)
         .map_err(|_| UdpNetworkerErrors::FailedToSetBroadcastMode)?;
@@ -46,31 +71,31 @@ pub async fn udp_broadcast_presence(
     for _tick in 0..duration {
         let msg = message.as_bytes();
 
-        // Send broadcast packet to the local network
-        let msg = socket
+        // Send presence packet to the entire local network
+        let bytes_sent = socket
             .send_to(msg, "255.255.255.255:6363")
             .await
             .map_err(|_| UdpNetworkerErrors::FailedToSendBroadcast)?;
 
-        println!("Succesfully broadcasted: {} bytes | Data: {}", msg, message);
+        println!("Successfully broadcasted: {} bytes | Data: {}", bytes_sent, message);
 
-        // Wait one second before the next broadcast
+        // Wait one second before sending the next broadcast
         sleep(Duration::from_secs(1)).await;
     }
 
-    // Disable broadcast mode after the loop finishes
+    // Disable broadcast mode after finishing — good practice to clean up
     socket
         .set_broadcast(false)
         .map_err(|_| UdpNetworkerErrors::FailedToSetBroadcastMode)?;
 
-    println!("Succefully disabled broadcast mode.");
+    println!("Successfully disabled broadcast mode.");
 
     Ok(())
 }
 
 /// Listens for incoming UDP packets for the given duration.
-/// Returns Some(SocketAddr) if a valid CesaConn device is found,
-/// or None on timeout, socket error, oversized packet, or name mismatch.
+/// Returns Ok(SocketAddr) if a valid CesaConn device is found.
+/// Returns Err if timeout, socket error, oversized packet, or name mismatch.
 pub async fn udp_find_broadcaster(
     duration: u64,
     message: &str,
@@ -82,49 +107,54 @@ pub async fn udp_find_broadcaster(
         duration
     };
 
+    // Bind to all interfaces on port 6363 — same port as broadcaster
     let socket = UdpSocket::bind("0.0.0.0:6363")
         .await
         .map_err(|_| UdpNetworkerErrors::FailedToBindSocket)?;
 
-    let mut buf = [0; 1024]; // Receive buffer — max 1024 bytes
+    // Receive buffer — max 1024 bytes per packet
+    let mut buf = [0; 1024];
 
     println!("Searching for devices on network...");
 
-    // Wait for an incoming packet, abort if duration expires
-    let result = timeout(Duration::from_secs(duration), socket.recv_from(&mut buf))
+    // Wait for incoming packet — abort if duration expires
+    let (len, addr) = timeout(Duration::from_secs(duration), socket.recv_from(&mut buf))
         .await
-        .map_err(|_| UdpNetworkerErrors::Timeout)?
-        .map_err(|_| UdpNetworkerErrors::FailedToFetchResult)?;
+        .map_err(|_| UdpNetworkerErrors::Timeout)?       // timeout expired
+        .map_err(|_| UdpNetworkerErrors::FailedToFetchResult)?; // socket error
 
-    if result.0 > buf.len() {
+    // If len equals buffer size, packet may have been truncated — discard it
+    // recv_from never returns more than buf.len(), so == means truncation occurred
+    if len == buf.len() {
         return Err(UdpNetworkerErrors::DataTooBig);
     }
 
-    let name = String::from_utf8_lossy(&buf[..result.0]);
+    // Convert received bytes to string for device name comparison
+    let name = String::from_utf8_lossy(&buf[..len]);
 
-    // Verify the packet comes from a CesaConn device
-    if name.starts_with(&message) {
-        println!("Found device: {} at IP: {}", name, result.1.ip());
-        Ok(result.1)
+    // Verify the packet comes from a recognized CesaConn device
+    if name.starts_with(message) {
+        println!("Found device: {} at IP: {}", name, addr.ip());
+        Ok(addr)
     } else {
+        // Device responded but name doesn't match — ignore it
         Err(UdpNetworkerErrors::UnknownDevice)
     }
 }
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use tokio::net::UdpSocket;
 
     /// Test that UdpSocket::bind successfully binds to a valid address
     #[tokio::test]
     async fn test_bind_socket() {
-        let socket = UdpSocket::bind("0.0.0.0:0").await.unwrap(); // port 0 = OS picks random port
+        let socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
         assert!(socket.local_addr().is_ok());
     }
 
-    /// Test that duration cap works — duration above MAX should be capped
+    /// Test that duration cap works
     #[tokio::test]
     async fn test_duration_cap() {
         let over_limit = MAX_BROADCAST_DURATION + 100;
@@ -139,47 +169,37 @@ mod tests {
     /// Test that udp_find_broadcaster times out when no broadcaster is present
     #[tokio::test]
     async fn test_find_broadcaster_timeout() {
-        // No broadcaster running — should timeout and return None
         let result = udp_find_broadcaster(1, BROADCAST_NAME).await;
-        assert!(result.is_none());
+        assert!(result.is_err());
+        assert!(matches!(result, Err(UdpNetworkerErrors::Timeout)));
     }
 
     /// Test full broadcast + discovery loop
-    /// Spawns a broadcaster and a finder at the same time
     #[tokio::test]
     async fn test_broadcast_and_find() {
-        // Spawn broadcaster in background
         tokio::spawn(async {
-            udp_broadcast_presence(BROADCAST_NAME, 3).await;
+            udp_broadcast_presence(BROADCAST_NAME, 3).await.ok();
         });
 
-        // Give broadcaster a moment to start
         sleep(Duration::from_millis(100)).await;
 
-        // Try to find the broadcaster
         let result = udp_find_broadcaster(3, BROADCAST_NAME).await;
-
-        assert!(result.is_some());
+        assert!(result.is_ok());
     }
 
     /// Test that unknown broadcast name is rejected
     #[tokio::test]
     async fn test_unknown_device_rejected() {
-        // Broadcast with wrong name
         tokio::spawn(async {
             let socket = UdpSocket::bind("0.0.0.0:6363").await.unwrap();
             socket.set_broadcast(true).unwrap();
-            socket
-                .send_to(b"UnknownDevice", "255.255.255.255:6363")
-                .await
-                .unwrap();
+            socket.send_to(b"UnknownDevice", "255.255.255.255:6363").await.unwrap();
         });
 
         sleep(Duration::from_millis(100)).await;
 
-        // Finder should reject unknown device
         let result = udp_find_broadcaster(1, BROADCAST_NAME).await;
-        assert!(result.is_none());
+        assert!(matches!(result, Err(UdpNetworkerErrors::UnknownDevice) | Err(UdpNetworkerErrors::Timeout)));
     }
 
     /// Test that oversized packet is rejected
@@ -188,18 +208,21 @@ mod tests {
         tokio::spawn(async {
             let socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
             socket.set_broadcast(true).unwrap();
-
-            // Send packet larger than buffer (1024 bytes)
             let big_data = vec![0u8; 1025];
-            socket
-                .send_to(&big_data, "255.255.255.255:6363")
-                .await
-                .unwrap();
+            socket.send_to(&big_data, "255.255.255.255:6363").await.unwrap();
         });
 
         sleep(Duration::from_millis(100)).await;
 
         let result = udp_find_broadcaster(1, BROADCAST_NAME).await;
-        assert!(result.is_none());
+        assert!(matches!(result, Err(UdpNetworkerErrors::DataTooBig) | Err(UdpNetworkerErrors::Timeout) | Err(UdpNetworkerErrors::UnknownDevice)));
+    }
+
+    /// Test Display for all error variants
+    #[test]
+    fn test_error_display() {
+        assert!(!UdpNetworkerErrors::FailedToBindSocket.to_string().is_empty());
+        assert!(!UdpNetworkerErrors::Timeout.to_string().is_empty());
+        assert!(!UdpNetworkerErrors::UnknownDevice.to_string().is_empty());
     }
 }
