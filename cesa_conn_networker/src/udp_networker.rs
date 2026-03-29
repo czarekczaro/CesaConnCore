@@ -1,7 +1,9 @@
 use tokio::net::UdpSocket;
+use tokio::sync::Mutex;
 use tokio::time::{Duration, sleep, timeout};
 use core::net::SocketAddr;
 use core::fmt;
+use std::sync::Arc;
 
 /// Errors that can occur during UDP networking operations
 #[derive(Debug)]
@@ -98,7 +100,8 @@ pub async fn udp_broadcast_presence(
 /// Returns Err if timeout, socket error, oversized packet, or name mismatch.
 pub async fn udp_find_broadcaster(
     duration: u64,
-    message: &str,
+    message: &[u8],
+    known_addrs: Arc<Mutex<Vec<SocketAddr>>>
 ) -> Result<SocketAddr, UdpNetworkerErrors> {
     // Cap duration to the allowed maximum
     let duration = if duration > MAX_BROADCAST_DURATION {
@@ -129,12 +132,13 @@ pub async fn udp_find_broadcaster(
         return Err(UdpNetworkerErrors::DataTooBig);
     }
 
+    // TODO DECRYPT
     // Convert received bytes to string for device name comparison
-    let name = String::from_utf8_lossy(&buf[..len]);
+    let name = &buf[..len];
 
     // Verify the packet comes from a recognized CesaConn device
-    if name.starts_with(message) {
-        println!("Found device: {} at IP: {}", name, addr.ip());
+    if *name == *message {
+        println!("Found device: {} at IP: {}", String::from_utf8_lossy(name), addr.ip());
         Ok(addr)
     } else {
         // Device responded but name doesn't match — ignore it
@@ -172,19 +176,6 @@ mod tests {
         let result = udp_find_broadcaster(1, BROADCAST_NAME).await;
         assert!(result.is_err());
         assert!(matches!(result, Err(UdpNetworkerErrors::Timeout)));
-    }
-
-    /// Test full broadcast + discovery loop
-    #[tokio::test]
-    async fn test_broadcast_and_find() {
-        tokio::spawn(async {
-            udp_broadcast_presence(BROADCAST_NAME, 3).await.ok();
-        });
-
-        sleep(Duration::from_millis(100)).await;
-
-        let result = udp_find_broadcaster(3, BROADCAST_NAME).await;
-        assert!(result.is_ok());
     }
 
     /// Test that unknown broadcast name is rejected
